@@ -134,9 +134,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
-import static com.android.internal.telephony.PhoneConstants.SUBSCRIPTION_KEY;
-import com.android.internal.telephony.RILConstants;
-
 /**
  * Implementation of the ITelephony interface.
  */
@@ -197,8 +194,7 @@ public class PhoneInterfaceManager extends ITelephony.Stub {
     private static final int EVENT_GET_FORBIDDEN_PLMNS_DONE = 49;
     private static final int CMD_SWITCH_SLOTS = 50;
     private static final int EVENT_SWITCH_SLOTS_DONE = 51;
-
-    private static final int CMD_TOGGLE_LTE = 99; // not used yet
+    private static final int CMD_TOGGLE_2G = 998;
 
     // Parameters of select command.
     private static final int SELECT_COMMAND = 0xA4;
@@ -221,6 +217,7 @@ public class PhoneInterfaceManager extends ITelephony.Stub {
     private MainThreadHandler mMainThreadHandler;
     private SubscriptionController mSubscriptionController;
     private SharedPreferences mTelephonySharedPreferences;
+    private int pNetwork;
 
     private static final String PREF_CARRIERS_ALPHATAG_PREFIX = "carrier_alphtag_";
     private static final String PREF_CARRIERS_NUMBER_PREFIX = "carrier_number_";
@@ -1205,67 +1202,36 @@ public class PhoneInterfaceManager extends ITelephony.Stub {
         mApp.startActivity(intent);
     }
 
-    public int getPreferredNetworkMode() {
+    public void toggle2G(boolean on) {
+        int network = -1;
         final int phoneSubId = mSubscriptionController.getDefaultDataSubId();
-        Phone sPhone = getPhone(phoneSubId);
-        int preferredNetworkMode = RILConstants.PREFERRED_NETWORK_MODE;
-        if (sPhone.getLteOnCdmaMode() == PhoneConstants.LTE_ON_CDMA_TRUE) {
-            preferredNetworkMode = Phone.NT_MODE_GLOBAL;
-        }
-        int network = Settings.Global.getInt(mPhone.getContext().getContentResolver(),
-              Settings.Global.PREFERRED_NETWORK_MODE + phoneSubId, preferredNetworkMode);
-        return network;
-    }
+        Phone aphone = getPhone(phoneSubId);
 
-    public void toggleLTE(boolean on) {
-        int network = getPreferredNetworkMode();
-        boolean isCdmaDevice = mPhone.getLteOnCdmaMode() == PhoneConstants.LTE_ON_CDMA_TRUE;
-
-        switch (network) {
-        // GSM Devices
-        case Phone.NT_MODE_WCDMA_PREF:
-        case Phone.NT_MODE_WCDMA_ONLY:
-        case Phone.NT_MODE_GSM_UMTS:
-        case Phone.NT_MODE_GSM_ONLY:
-            //push old network to useless Settings.Global.PREFERRED_NETWORK_MODE
-            android.provider.Settings.Global.putInt(mApp.getContentResolver(),
-                    android.provider.Settings.Global.PREFERRED_NETWORK_MODE, network);
-            network = Phone.NT_MODE_LTE_GSM_WCDMA;
-            break;
-        case Phone.NT_MODE_LTE_GSM_WCDMA:
-            network = Settings.Global.getInt(mPhone.getContext().getContentResolver(),
-              Settings.Global.PREFERRED_NETWORK_MODE, 1);
-            break;
-        // GSM and CDMA devices
-        case Phone.NT_MODE_GLOBAL:
-            // Wtf to do here?
-            network = Phone.NT_MODE_LTE_CDMA_EVDO_GSM_WCDMA;
-            break;
-        case Phone.NT_MODE_LTE_CDMA_EVDO_GSM_WCDMA:
-            // Determine the correct network type
-            if (isCdmaDevice) {
-                network = Phone.NT_MODE_CDMA;
+        if (on) {
+            if(phoneSubId != 0) {
+                pNetwork = android.provider.Settings.Global.getInt(mApp.getContentResolver(),
+                    android.provider.Settings.Global.PREFERRED_NETWORK_MODE + phoneSubId, 0);
             } else {
-                network = Phone.NT_MODE_WCDMA_PREF;
+                pNetwork = android.provider.Settings.Global.getInt(mApp.getContentResolver(),
+                    android.provider.Settings.Global.PREFERRED_NETWORK_MODE, 0);
             }
-            break;
-        // CDMA Devices
-        case Phone.NT_MODE_CDMA:
-            network = Phone.NT_MODE_LTE_CDMA_AND_EVDO;
-            break;
-        case Phone.NT_MODE_LTE_CDMA_AND_EVDO:
-            network = Phone.NT_MODE_CDMA;
-            break;
+            network = Phone.NT_MODE_GSM_ONLY;
+        } else {
+            network = pNetwork;
         }
 
-        final int phoneSubId = mSubscriptionController.getDefaultDataSubId();
-        Phone sPhone = getPhone(phoneSubId);
-        sPhone.setPreferredNetworkType(network,
-                mMainThreadHandler.obtainMessage(CMD_TOGGLE_LTE));
-
-        android.provider.Settings.Global.putInt(mApp.getContentResolver(),
+        aphone.setPreferredNetworkType(network,
+                mMainThreadHandler.obtainMessage(CMD_TOGGLE_2G));
+        if(phoneSubId != 0) {
+            android.provider.Settings.Global.putInt(mApp.getContentResolver(),
                 android.provider.Settings.Global.PREFERRED_NETWORK_MODE + phoneSubId, network);
+        } else {
+            android.provider.Settings.Global.putInt(mApp.getContentResolver(),
+                android.provider.Settings.Global.PREFERRED_NETWORK_MODE, network);
+        }
 
+        log("DefaultSubId: " + phoneSubId);
+        log("NetworkType: " + network);
     }
 
     /**
@@ -4052,8 +4018,7 @@ public class PhoneInterfaceManager extends ITelephony.Stub {
             throw new NullPointerException("carriers cannot be null");
         }
 
-        int[] subIds = SubscriptionManager.getSubId(slotIndex);
-        int subId = (subIds != null ? subIds[0] : SubscriptionManager.INVALID_SUBSCRIPTION_ID);
+        int subId = SubscriptionManager.getSubId(slotIndex)[0];
         int[] retVal = (int[]) sendRequest(CMD_SET_ALLOWED_CARRIERS, carriers, subId);
         return retVal[0];
     }
@@ -4069,9 +4034,7 @@ public class PhoneInterfaceManager extends ITelephony.Stub {
     @Override
     public List<CarrierIdentifier> getAllowedCarriers(int slotIndex) {
         enforceReadPrivilegedPermission();
-
-        int[] subIds = SubscriptionManager.getSubId(slotIndex);
-        int subId = (subIds != null ? subIds[0] : SubscriptionManager.INVALID_SUBSCRIPTION_ID);
+        int subId = SubscriptionManager.getSubId(slotIndex)[0];
         return (List<CarrierIdentifier>) sendRequest(CMD_GET_ALLOWED_CARRIERS, null, subId);
     }
 
@@ -4138,26 +4101,6 @@ public class PhoneInterfaceManager extends ITelephony.Stub {
             phone.carrierActionReportDefaultNetworkStatus(report);
         } catch (Exception e) {
             Log.e(LOG_TAG, "carrierAction: ReportDefaultNetworkStatus fails. Exception ex=" + e);
-        }
-    }
-
-    /**
-     * Action set from carrier signalling broadcast receivers to reset all carrier actions
-     * @param subId the subscription ID that this action applies to.
-     * {@hide}
-     */
-    @Override
-    public void carrierActionResetAll(int subId) {
-        enforceModifyPermission();
-        final Phone phone = getPhone(subId);
-        if (phone == null) {
-            loge("carrierAction: ResetAll fails with invalid sibId: " + subId);
-            return;
-        }
-        try {
-            phone.carrierActionResetAll();
-        } catch (Exception e) {
-            Log.e(LOG_TAG, "carrierAction: ResetAll fails. Exception ex=" + e);
         }
     }
 
@@ -4478,3 +4421,5 @@ public class PhoneInterfaceManager extends ITelephony.Stub {
         return phone.getCarrierIdListVersion();
     }
 }
+
+
